@@ -215,10 +215,17 @@ git push
 
 ### 3. 定时与手动运行
 
-- **定时**：每 6 小时自动运行（cron: `0 */6 * * *`，UTC）
-- **手动**：仓库页 **Actions → 选择「2026国考公告监控」→ Run workflow**
+- **定时**：每 6 小时自动运行（cron: `0 */6 * * *`，UTC），约对应北京时间 8:00、14:00、20:00、02:00。
+- **手动**：仓库页 **Actions → 选择「2026国考公告监控」→ Run workflow**。
 
-运行使用 **Python 3.11**，在 Actions 中创建虚拟环境并执行 `python monitor.py`；`cache.json` 通过 `actions/cache` 使用可恢复前缀 + 每次运行唯一 key 持久化，避免缓存键固定导致的状态不同步。
+运行使用 **Python 3.11**，在 Actions 中创建虚拟环境并执行 `monitor.py`；`cache.json` 通过 `actions/cache` 在多次运行间持久化。
+
+#### GitHub 云端运行：不依赖你电脑开关机
+
+- Workflow 使用 **`runs-on: ubuntu-latest`**，即在 **GitHub 提供的云端虚拟机** 上执行，和你本机是否开机、是否联网无关。
+- 只要仓库在 GitHub 上、Actions 已启用，到点就会在云端跑监控并（有新增时）发邮件，**电脑可以一直关机**。
+- **建议**：在仓库 **Actions** 页确认该 workflow 未被禁用（若列表里显示 “Enable workflow” 则点一次启用）。
+- **注意**：若仓库超过约 60 天没有任何提交或 PR 等“活动”，GitHub 可能自动禁用定时任务；届时到 **Actions → 该 workflow → Enable workflow** 重新启用即可，或在这之前随便做一次提交/PR 保持活跃。
 
 ---
 

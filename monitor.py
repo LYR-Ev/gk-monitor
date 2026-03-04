@@ -255,9 +255,13 @@ def send_email(new_titles: list[str]) -> bool:
         print("未配置邮箱环境变量 EMAIL_USER / EMAIL_PASS / EMAIL_TO，跳过发送邮件。")
         return False
 
-    subject = "【2026国考】发现新增公告"
-    body = "以下为本次新发现的公告标题：\n\n" + "\n".join(f"- {t}" for t in new_titles)
-    body += f"\n\n共 {len(new_titles)} 条。请登录专题页查看：{TARGET_URL}"
+    if new_titles:
+        subject = "【2026国考】发现新增公告"
+        body = "以下为本次新发现的公告标题：\n\n" + "\n".join(f"- {t}" for t in new_titles)
+        body += f"\n\n共 {len(new_titles)} 条。请登录专题页查看：{TARGET_URL}"
+    else:
+        subject = "【2026国考】本次检查：无新增公告"
+        body = "本次检查未发现新增公告。\n\n请登录专题页查看：" + TARGET_URL
 
     msg = MIMEMultipart()
     msg["Subject"] = subject
@@ -309,7 +313,10 @@ def main() -> None:
         else:
             print("邮件发送失败，本次不更新缓存，保留新增以便下次重试。", file=sys.stderr)
     else:
-        print("无新增公告。")
+        print("无新增公告，发送「无新增」通知邮件。")
+        send_email([])  # 无新公告也发一封说明邮件
+        if current_titles:
+            save_cache(current_titles)
 
     print("本次运行结束。")
 
