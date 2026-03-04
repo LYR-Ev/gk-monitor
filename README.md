@@ -209,6 +209,12 @@ git push
 | `SMTP_HOST` | 如 `smtp.163.com` | 可选，不填则用 `smtp.qq.com` |
 | `SMTP_PORT` | 如 `587`         | 可选，不填则用 `587` |
 
+5. **监控的页面不对、一直收不到「发现新增公告」时**，可配置 **公告列表真实页面** 的 URL：  
+   默认脚本抓的是专题入口页（可能需在浏览器里再点一次才到公告列表），若入口页没有公告列表的 HTML，就永远解析不到新公告。  
+   **获取方法**：浏览器打开邮件里的链接 → **再点一次**进入能看到「招考公告/通知公告」列表的那一页 → 复制**地址栏完整 URL**。  
+   在 Secrets 里 **New repository secret** → Name 填 `MONITOR_URL`，Secret 填刚复制的 URL（如 `http://www.scs.gov.cn/...` 或 `http://bm.scs.gov.cn/...`）→ 保存。  
+   配置后脚本会**直接抓该页面**，不再走入口+跳转，才有机会解析到公告标题并发出「发现新增公告」邮件。
+
 **操作步骤**：在 **Actions** 的 Secrets 页 → 点 **New repository secret** → **Name** 填 `SMTP_HOST`，**Secret** 填你的 SMTP 服务器（如 `smtp.163.com`）→ 保存；再新建一个，Name 填 `SMTP_PORT`，Secret 填 `587`（或服务商要求的端口）→ 保存。
 
 保存后，workflow 中通过 `secrets.EMAIL_USER` 等使用，未设置的 `SMTP_HOST` / `SMTP_PORT` 在脚本中会使用默认值，无需在 YAML 里写明文。
@@ -260,8 +266,39 @@ git push
 
 ## 七、常见问题
 
-- **收不到邮件**：检查 Secrets/环境变量是否填全、授权码是否正确（QQ 邮箱需开启 SMTP 并使用授权码）。
-- **首次运行就发邮件**：首次无 `cache.json`，当前抓到的标题都会视为“新增”，属正常；之后仅新增才会触发邮件。
+### 手动运行 workflow 后没收到邮件
+
+按下面顺序排查：
+
+**1. 看这次运行的日志（最重要）**
+
+- 打开仓库 **Actions** → 点进**最近一次**「2026国考公告监控」运行（如 #2、#3）
+- 点下面的 **monitor** 这一项（绿色勾那一行）
+- 在日志里搜索或顺次看：
+  - 若出现 **「环境自检: 以下邮箱变量未设置」** → 说明 GitHub Secrets 没配全，收不到邮件是正常的。请到 **Settings → Secrets and variables → Actions** 补全 `EMAIL_USER`、`EMAIL_PASS`、`EMAIL_TO`。
+  - 若出现 **「未配置邮箱环境变量 EMAIL_USER / EMAIL_PASS / EMAIL_TO，跳过发送邮件」** → 同上，Secrets 未配置或未生效（例如刚加的 Secrets 要重新跑一次 workflow）。
+  - 若出现 **「SMTP 认证失败」** → 发件邮箱或授权码错误。QQ 邮箱必须用「授权码」而不是登录密码；163/126 用「授权密码」。可在本地用 `python test_email.py` 先验证。
+  - 若出现 **「邮件已发送。」** → 脚本侧已发信，请到**收件箱、垃圾邮件、订阅邮件**里找主题带「2026国考」的邮件。
+
+**2. 确认 Secrets 已填且生效**
+
+- **Settings → Secrets and variables → Actions** 里必须有：`EMAIL_USER`、`EMAIL_PASS`、`EMAIL_TO`（Name 必须一致，区分大小写）。
+- 修改 Secrets 后，需要**再点一次 Run workflow** 才会用新值；历史那次运行用的还是旧配置。
+
+**3. 检查垃圾箱**
+
+- 发信方是 GitHub 云端 IP，部分邮箱会把首封信进垃圾箱。请查「垃圾邮件」「订阅/推广」等文件夹。
+
+**4. 发件邮箱限制（QQ/163 等）**
+
+- 从 GitHub 海外服务器发信，个别邮箱会拦截或限制。若日志里已是「邮件已发送」但始终收不到，可尝试：
+  - 换一个邮箱（如 Gmail、Outlook）做发件/收件测试；
+  - 或在 QQ 邮箱网页版「设置 → 账户」里查看是否有「异地登录」「SMTP 拒绝」等安全提示，必要时临时放宽后再试一次 Run workflow。
+
+---
+
+- **首次运行就发邮件**：首次无 `cache.json`，当前抓到的标题都会视为“新增”，属正常；之后会按「有新增 / 无新增」各发对应邮件。
+- **一直只有「无新增」、从没收到「发现新增公告」**：多半是监控的页面不对（抓的是入口/跳转页，公告在“再点一次”后的页面）。请按上面「配置 Secrets」第 5 步，配置 **MONITOR_URL** 为「再点一次」后那页的完整地址。
 - **想换 SMTP**：设置环境变量或 Secrets：`SMTP_HOST`、`SMTP_PORT`（如 465 需在代码中改用 SMTP_SSL，当前为 587 + STARTTLS）。
 
 如需调整监控频率，只需修改 `.github/workflows/monitor.yml` 中的 `cron` 表达式。

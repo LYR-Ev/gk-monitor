@@ -43,6 +43,7 @@ jobs:
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          MONITOR_URL: ${{ secrets.MONITOR_URL }}
         run: |
           . .venv/bin/activate
           python monitor.py
