@@ -1,0 +1,50 @@
+# 国家公务员局 2026 国考公告监控
+# 每 6 小时运行一次，支持手动触发；使用 secrets 传递邮箱配置
+name: 2026国考公告监控
+
+on:
+  schedule:
+    # 每 6 小时运行（UTC），约对应北京时间 8:00、14:00、20:00、02:00
+    - cron: "0 */6 * * *"
+  workflow_dispatch:  # 支持在 GitHub 网页或 API 手动触发
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 恢复 cache.json
+        uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: cache.json
+          key: gk-monitor-cache
+
+      - name: 创建虚拟环境并安装依赖
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install -r requirements.txt
+
+      - name: 运行监控脚本
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: |
+          . .venv/bin/activate
+          python monitor.py
+
+      - name: 保存 cache.json
+        uses: actions/cache/save@v4
+        if: hashFiles('cache.json') != ''
+        with:
+          path: cache.json
+          key: gk-monitor-cache
