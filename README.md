@@ -9,6 +9,7 @@
 ```
 gk-monitor/
 ├── monitor.py          # 监控主脚本
+├── test_email.py       # 仅用于测试发信的脚本（可选运行）
 ├── requirements.txt    # Python 依赖
 ├── .gitignore
 ├── README.md
@@ -94,6 +95,47 @@ python monitor.py
 
 不配置上述三个变量时，脚本仍会正常抓取与对比，但**不会发邮件**，只打印“未配置邮箱环境变量...”。
 
+#### 测试发信（验证能否成功收邮件）
+
+项目内提供了 **`test_email.py`**，用于在不跑完整监控的前提下，单独验证邮箱配置是否正确、能否成功发信。
+
+**步骤：**
+
+1. **设置环境变量**（与上面相同，三个必填）  
+   - PowerShell 示例（请替换为你的邮箱和授权码）：
+     ```powershell
+     $env:EMAIL_USER = "your@qq.com"
+     $env:EMAIL_PASS = "你的授权码"
+     $env:EMAIL_TO   = "your@qq.com"   # 收件人，可填自己
+     ```
+   - Linux/macOS：
+     ```bash
+     export EMAIL_USER="your@qq.com"
+     export EMAIL_PASS="你的授权码"
+     export EMAIL_TO="your@qq.com"
+     ```
+
+2. **运行测试脚本**（在项目目录、已激活虚拟环境下）：
+   ```bash
+   python test_email.py
+   ```
+
+3. **看结果**  
+   - 若输出 **「测试邮件已发送。请到收件箱（及垃圾箱）查看。」**：说明配置正确，`monitor.py` 在发现新增公告时也能正常发信。  
+   - 若报 **SMTP 认证失败**：请检查发件邮箱与授权码；QQ/163 需在邮箱设置里开启 SMTP 并使用「授权码」/「授权密码」，不能使用登录密码。
+
+**常见邮箱 SMTP（可选，不设则默认 QQ）：**
+
+| 邮箱     | SMTP_HOST      | SMTP_PORT | 说明 |
+|----------|----------------|-----------|------|
+| QQ 邮箱  | smtp.qq.com    | 587       | 默认，需授权码 |
+| 163 邮箱 | smtp.163.com   | 587       | 需授权密码     |
+| 126 邮箱 | smtp.126.com   | 587       | 需授权密码     |
+| 企业邮箱 | 按服务商说明   | 多为 587 或 465 | 若为 465 需在代码中用 SMTP_SSL |
+
+若使用 163/126，可先设置：  
+`$env:SMTP_HOST = "smtp.163.com"` 再运行 `python test_email.py`。
+
 #### 如何确认已激活虚拟环境并配置好环境变量
 
 - **看命令行提示**：激活虚拟环境后，提示符前通常会出现 `(.venv)` 或 `(.venv) PS ...`，说明当前 shell 在虚拟环境中。
@@ -117,7 +159,7 @@ python monitor.py
 
 - 只访问公开页面：`http://bm.scs.gov.cn/kl2026`
 - 使用 User-Agent 与超时，不绕过登录、验证码或安全机制
-- 仅抓取公告标题，与同目录下 `cache.json` 对比，有新增才发邮件并更新缓存
+- 仅抓取公告标题，与同目录下 `cache.json` 对比；有新增时先发邮件，**仅在发送成功后**更新缓存
 
 ---
 
@@ -150,7 +192,7 @@ git push
 
 1. 打开仓库：`https://github.com/你的用户名/gk-monitor`
 2. 进入 **Settings → Secrets and variables → Actions**
-3. 点击 **New repository secret**，依次添加：
+3. 点击 **New repository secret**，先添加必填三项：
 
 | Name         | Value           | 说明     |
 |-------------|-----------------|----------|
@@ -158,14 +200,25 @@ git push
 | `EMAIL_PASS`| 邮箱授权码/密码 | 必填     |
 | `EMAIL_TO`  | 收件邮箱        | 必填     |
 
-保存后，workflow 中通过 `secrets.EMAIL_USER` 等使用，无需在 YAML 里写明文。
+4. **可选项**（非 QQ 邮箱时再补）：  
+   若使用 **QQ 邮箱**，可不添加下面两项，workflow 会使用默认 `smtp.qq.com:587`。  
+   若使用 **163 / 126 / 企业邮箱** 等，再点 **New repository secret** 补两条：
+
+| Name        | Value           | 说明 |
+|-------------|-----------------|------|
+| `SMTP_HOST` | 如 `smtp.163.com` | 可选，不填则用 `smtp.qq.com` |
+| `SMTP_PORT` | 如 `587`         | 可选，不填则用 `587` |
+
+**操作步骤**：在 **Actions** 的 Secrets 页 → 点 **New repository secret** → **Name** 填 `SMTP_HOST`，**Secret** 填你的 SMTP 服务器（如 `smtp.163.com`）→ 保存；再新建一个，Name 填 `SMTP_PORT`，Secret 填 `587`（或服务商要求的端口）→ 保存。
+
+保存后，workflow 中通过 `secrets.EMAIL_USER` 等使用，未设置的 `SMTP_HOST` / `SMTP_PORT` 在脚本中会使用默认值，无需在 YAML 里写明文。
 
 ### 3. 定时与手动运行
 
 - **定时**：每 6 小时自动运行（cron: `0 */6 * * *`，UTC）
 - **手动**：仓库页 **Actions → 选择「2026国考公告监控」→ Run workflow**
 
-运行使用 **Python 3.11**，在 Actions 中创建虚拟环境并执行 `python monitor.py`；`cache.json` 通过 `actions/cache` 在多次运行间持久化，实现“仅新增时发邮件”。
+运行使用 **Python 3.11**，在 Actions 中创建虚拟环境并执行 `python monitor.py`；`cache.json` 通过 `actions/cache` 使用可恢复前缀 + 每次运行唯一 key 持久化，避免缓存键固定导致的状态不同步。
 
 ---
 

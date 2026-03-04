@@ -25,7 +25,10 @@ jobs:
         id: cache
         with:
           path: cache.json
-          key: gk-monitor-cache
+          key: gk-monitor-cache-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            gk-monitor-cache-${{ github.ref_name }}-
+            gk-monitor-cache-
 
       - name: 创建虚拟环境并安装依赖
         run: |
@@ -38,6 +41,8 @@ jobs:
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
         run: |
           . .venv/bin/activate
           python monitor.py
@@ -47,4 +52,4 @@ jobs:
         if: hashFiles('cache.json') != ''
         with:
           path: cache.json
-          key: gk-monitor-cache
+          key: gk-monitor-cache-${{ github.ref_name }}-${{ github.run_id }}

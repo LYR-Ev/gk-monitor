@@ -10,6 +10,7 @@
 
 import json
 import os
+import re
 import smtplib
 import ssl
 import sys
@@ -25,7 +26,10 @@ from bs4 import BeautifulSoup
 # ---------------------------------------------------------------------------
 
 # 国家公务员局 2026 国考专题公开页面（仅访问此公开页）
+# 该页可能返回 302 或页面内 JS 跳转，脚本会尝试跟随一次跳转并合并解析
 TARGET_URL = "http://bm.scs.gov.cn/kl2026"
+# 若主站返回的跳转目标（用于合并抓取，增加可解析内容）
+REDIRECT_FALLBACK_URL = "http://www.scs.gov.cn/gkIndex.html"
 
 # 请求超时（秒）
 REQUEST_TIMEOUT = 30
@@ -42,6 +46,40 @@ ENV_EMAIL_TO = "EMAIL_TO"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+ANNOUNCEMENT_KEYWORDS = (
+    "公告",
+    "通知",
+    "招考",
+    "报考",
+    "职位",
+    "调剂",
+    "笔试",
+    "面试",
+    "资格",
+    "体检",
+    "录用",
+    "成绩",
+    "中央机关",
+    "国考",
+)
+
+NOISE_KEYWORDS = (
+    "首页",
+    "上一页",
+    "下一页",
+    "末页",
+    "尾页",
+    "登录",
+    "注册",
+    "打印",
+    "下载",
+    "app",
+    "ios",
+    "android",
+    "copyright",
+    "icp",
 )
 
 
@@ -78,25 +116,71 @@ def fetch_page(url: str) -> str:
     return resp.text
 
 
+def fetch_page_maybe_follow_redirect() -> str:
+    """
+    先请求 TARGET_URL；若返回内容很少且包含 location.href 跳转，
+    则解析出目标 URL 再请求一次，将两段 HTML 合并返回供解析。
+    仍只访问公开页面，不绕过任何安全机制。
+    """
+    html_main = fetch_page(TARGET_URL)
+    if len(html_main) < 2000 and "location.href" in html_main:
+        match = re.search(r'location\.href\s*=\s*["\']([^"\']+)["\']', html_main)
+        if match:
+            redirect_url = match.group(1).strip()
+            if redirect_url.startswith("http"):
+                try:
+                    html_redirect = fetch_page(redirect_url)
+                    return html_main + "\n" + html_redirect
+                except requests.RequestException:
+                    pass
+        try:
+            html_fallback = fetch_page(REDIRECT_FALLBACK_URL)
+            return html_main + "\n" + html_fallback
+        except requests.RequestException:
+            pass
+    return html_main
+
+
 def parse_announcement_titles(html: str) -> list[str]:
     """
     从专题页 HTML 中解析公告标题（仅标题文本）。
     针对常见列表结构：链接文本、列表项等。
     """
     soup = BeautifulSoup(html, "html.parser")
-    titles: list[str] = []
 
-    # 常见选择器：公告列表链接、列表项中的链接
+    def normalize_text(text: str) -> str:
+        return re.sub(r"\s+", " ", text).strip()
+
+    def looks_like_announcement(text: str, href: str) -> bool:
+        text_lower = text.lower()
+        href_lower = href.lower()
+        if len(text) < 6 or len(text) > 120:
+            return False
+        if href_lower.startswith("javascript:"):
+            return False
+        if any(k in text_lower for k in NOISE_KEYWORDS):
+            return False
+        has_keyword = any(k in text for k in ANNOUNCEMENT_KEYWORDS)
+        has_date = bool(re.search(r"20\d{2}[./-年]\d{1,2}", text))
+        return has_keyword or has_date
+
+    titles: list[str] = []
     for link in soup.select("a"):
-        text = (link.get_text() or "").strip()
-        if not text or len(text) < 2:
-            continue
-        # 过滤明显非公告的链接（如“首页”“打印”等）
-        if any(skip in text for skip in ("首页", "打印", "登录", "注册", "©", "ICP")):
-            continue
-        # 保留像公告的标题：含“公告”“通知”“说明”等，或长度在合理范围
-        if "公告" in text or "通知" in text or "说明" in text or (10 <= len(text) <= 200):
+        text = normalize_text(link.get_text() or "")
+        href = (link.get("href") or "").strip()
+        if looks_like_announcement(text, href):
             titles.append(text)
+
+    # 兜底：若严格规则匹配过少，使用较宽松策略避免漏抓
+    if len(titles) < 3:
+        for link in soup.select("a"):
+            text = normalize_text(link.get_text() or "")
+            if not text:
+                continue
+            if any(k in text.lower() for k in NOISE_KEYWORDS):
+                continue
+            if 10 <= len(text) <= 120:
+                titles.append(text)
 
     # 去重并保持顺序
     seen = set()
@@ -147,7 +231,7 @@ def check_environment() -> None:
         print(f"环境自检: 以下邮箱变量未设置，将不会发邮件: {', '.join(missing)}")
 
 
-def send_email(new_titles: list[str]) -> None:
+def send_email(new_titles: list[str]) -> bool:
     """
     使用 SMTP 发送通知邮件。
     邮箱账号、密码、收件人均从环境变量读取，禁止写死。
@@ -156,12 +240,20 @@ def send_email(new_titles: list[str]) -> None:
     user = os.environ.get(ENV_EMAIL_USER)
     password = os.environ.get(ENV_EMAIL_PASS)
     to_addr = os.environ.get(ENV_EMAIL_TO)
-    smtp_host = os.environ.get("SMTP_HOST", "smtp.qq.com")
-    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+    smtp_host = os.environ.get("SMTP_HOST") or "smtp.qq.com"
+    smtp_port_raw = os.environ.get("SMTP_PORT")
+    try:
+        smtp_port = int(smtp_port_raw) if smtp_port_raw else 587
+    except ValueError:
+        print(
+            f"SMTP_PORT={smtp_port_raw!r} 非法，回退到默认端口 587。",
+            file=sys.stderr,
+        )
+        smtp_port = 587
 
     if not all((user, password, to_addr)):
         print("未配置邮箱环境变量 EMAIL_USER / EMAIL_PASS / EMAIL_TO，跳过发送邮件。")
-        return
+        return False
 
     subject = "【2026国考】发现新增公告"
     body = "以下为本次新发现的公告标题：\n\n" + "\n".join(f"- {t}" for t in new_titles)
@@ -180,10 +272,13 @@ def send_email(new_titles: list[str]) -> None:
             server.login(user, password)
             server.sendmail(user, [to_addr], msg.as_string())
         print("邮件已发送。")
+        return True
     except smtplib.SMTPAuthenticationError as e:
         print(f"SMTP 认证失败，请检查 EMAIL_USER/EMAIL_PASS: {e}", file=sys.stderr)
+        return False
     except Exception as e:
         print(f"发送邮件失败: {e}", file=sys.stderr)
+        return False
 
 
 def main() -> None:
@@ -193,7 +288,7 @@ def main() -> None:
     cached = load_cache()
 
     try:
-        html = fetch_page(TARGET_URL)
+        html = fetch_page_maybe_follow_redirect()
     except requests.RequestException as e:
         print(f"请求页面失败: {e}", file=sys.stderr)
         sys.exit(1)
@@ -204,16 +299,17 @@ def main() -> None:
         print(f"解析页面失败: {e}", file=sys.stderr)
         sys.exit(1)
 
+    print(f"本次共解析到 {len(current_titles)} 条公告/链接标题。")
     new_titles = get_new_titles(current_titles, cached)
     if new_titles:
         print(f"发现 {len(new_titles)} 条新增公告，发送通知。")
-        send_email(new_titles)
-        save_cache(current_titles)
+        email_sent = send_email(new_titles)
+        if email_sent:
+            save_cache(current_titles)
+        else:
+            print("邮件发送失败，本次不更新缓存，保留新增以便下次重试。", file=sys.stderr)
     else:
         print("无新增公告。")
-        # 若有新抓取的标题与缓存不同（例如页面改版），也更新缓存
-        if current_titles:
-            save_cache(current_titles)
 
     print("本次运行结束。")
 
