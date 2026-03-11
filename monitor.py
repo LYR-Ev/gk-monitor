@@ -43,7 +43,7 @@ USER_AGENT = (
 
 ANNOUNCEMENT_KEYWORDS = (
     "公告", "通知", "招考", "报考", "职位", "调剂", "笔试", "面试",
-    "资格", "体检", "录用", "成绩", "中央机关", "国考",
+    "资格", "体检", "录用", "成绩", "中央机关", "国考", "公示",
 )
 NOISE_KEYWORDS = (
     "首页", "上一页", "下一页", "末页", "尾页", "登录", "注册", "打印",
@@ -112,7 +112,7 @@ def parse_announcement_titles(html: str) -> list[str]:
             continue
         if any(k in text for k in NOISE_KEYWORDS):
             continue
-        if any(k in text for k in ANNOUNCEMENT_KEYWORDS) or (10 <= len(text) <= 120):
+        if any(k in text for k in ANNOUNCEMENT_KEYWORDS) or (8 <= len(text) <= 150):
             titles.append(text)
     seen = set()
     return [t for t in titles if t not in seen and not seen.add(t)]
@@ -197,6 +197,11 @@ def main() -> None:
         print(f"解析页面失败: {e}", file=sys.stderr)
         sys.exit(1)
     print(f"本次共解析到 {len(current_titles)} 条公告/链接标题。")
+    if current_titles:
+        for i, t in enumerate(current_titles[:10], 1):
+            print(f"  [{i}] {t[:60]}{'…' if len(t) > 60 else ''}")
+        if len(current_titles) > 10:
+            print(f"  … 共 {len(current_titles)} 条")
     new_titles = get_new_titles(current_titles, cached)
     if new_titles:
         print(f"发现 {len(new_titles)} 条新增公告，发送通知。")
