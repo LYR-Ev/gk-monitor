@@ -30,6 +30,8 @@ REDIRECT_FALLBACK_URL = "http://www.scs.gov.cn/gkIndex.html"
 ENV_MONITOR_URL = "MONITOR_URL"
 # 若不想在 GitHub Secrets 里配 MONITOR_URL，可把公告列表页的完整 URL 填在下面，否则留空 ""
 DEFAULT_MONITOR_URL = ""
+# 列表接口 URL（推荐）：直接请求返回 JSON 的 API，按 ID 比较新增，不受 HTML/JS 渲染影响。不填则仍用上面页面抓 HTML
+ENV_LIST_API_URL = "LIST_API_URL"
 
 REQUEST_TIMEOUT = 30
 CACHE_FILE = Path(__file__).resolve().parent / "cache.json"
@@ -51,23 +53,42 @@ NOISE_KEYWORDS = (
 )
 
 
-def load_cache() -> list[str]:
+def load_cache() -> dict:
+    """返回缓存内容：{"titles": [...]} 或 {"items": [{"id","title"}, ...]}，空则 {"titles": []}。"""
     if not CACHE_FILE.exists():
-        return []
+        return {"titles": []}
     try:
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data.get("titles", []) if isinstance(data, dict) else []
+        if not isinstance(data, dict):
+            return {"titles": []}
+        if "items" in data and isinstance(data["items"], list):
+            return data
+        return {"titles": data.get("titles", [])}
     except (json.JSONDecodeError, OSError):
-        return []
+        return {"titles": []}
 
 
-def save_cache(titles: list[str]) -> None:
+def save_cache_titles(titles: list[str]) -> None:
     try:
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump({"titles": titles}, f, ensure_ascii=False, indent=2)
     except OSError as e:
         print(f"保存缓存失败: {e}", file=sys.stderr)
+
+
+def save_cache_items(items: list[dict]) -> None:
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"items": items}, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        print(f"保存缓存失败: {e}", file=sys.stderr)
+
+
+def _cached_ids(cache: dict) -> set[str]:
+    if "items" not in cache or not isinstance(cache["items"], list):
+        return set()
+    return {str(x.get("id") or x.get("_id") or "") for x in cache["items"] if x.get("id") or x.get("_id")}
 
 
 def fetch_page(url: str) -> str:
@@ -97,6 +118,66 @@ def fetch_page_maybe_follow_redirect() -> str:
         except requests.RequestException:
             pass
     return html_main
+
+
+def _get_nested_list(data: dict) -> list | None:
+    """从常见 JSON 结构里取出列表：data.list, data.data.list, list, result.list 等。"""
+    for key in ("list", "data", "records", "rows", "result"):
+        if key not in data:
+            continue
+        val = data[key]
+        if isinstance(val, list):
+            return val
+        if isinstance(val, dict):
+            inner = _get_nested_list(val)
+            if inner is not None:
+                return inner
+    return None
+
+
+def _item_id(obj: dict) -> str:
+    for k in ("id", "_id", "articleId", "docId", "newsId", "contentId"):
+        if obj.get(k) is not None:
+            return str(obj[k])
+    return ""
+
+
+def _item_title(obj: dict) -> str:
+    for k in ("title", "name", "articleTitle", "titleName", "docTitle", "text"):
+        if obj.get(k) is not None and isinstance(obj[k], str):
+            return (obj[k] or "").strip()
+    return ""
+
+
+def fetch_api_list(api_url: str) -> list[dict]:
+    """
+    请求列表接口 JSON，返回 [{"id": str, "title": str}, ...]。
+    支持常见结构：data.list / data.data.list / list，项中 id/_id/articleId、title/name/articleTitle 等。
+    """
+    headers = {"User-Agent": USER_AGENT}
+    resp = requests.get(api_url, headers=headers, timeout=REQUEST_TIMEOUT)
+    resp.raise_for_status()
+    data = resp.json()
+    if not isinstance(data, dict):
+        return []
+    lst = _get_nested_list(data)
+    if not lst or not isinstance(lst, list):
+        return []
+    out: list[dict] = []
+    seen_ids: set[str] = set()
+    for item in lst:
+        if not isinstance(item, dict):
+            continue
+        iid = _item_id(item)
+        title = _item_title(item)
+        if not title and not iid:
+            continue
+        if iid and iid in seen_ids:
+            continue
+        if iid:
+            seen_ids.add(iid)
+        out.append({"id": iid or f"noid_{len(out)}", "title": title or "(无标题)"})
+    return out
 
 
 def parse_announcement_titles(html: str) -> list[str]:
@@ -185,7 +266,44 @@ def send_email(new_titles: list[str]) -> bool:
 def main() -> None:
     check_environment()
     print("开始监控 2026 国考公告...")
-    cached = load_cache()
+    cache = load_cache()
+    api_url = (os.environ.get(ENV_LIST_API_URL) or "").strip()
+    if api_url and api_url.startswith("http"):
+        # 接口模式：直接拉 JSON，按 ID 比较
+        print("使用列表接口（按 ID 比较）：" + (api_url[:60] + "…" if len(api_url) > 60 else api_url))
+        try:
+            current_items = fetch_api_list(api_url)
+        except requests.RequestException as e:
+            print(f"请求列表接口失败: {e}", file=sys.stderr)
+            sys.exit(1)
+        except (json.JSONDecodeError, ValueError) as e:
+            print(f"解析接口 JSON 失败: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"本次共解析到 {len(current_items)} 条（接口）。")
+        for i, it in enumerate(current_items[:10], 1):
+            print(f"  [{i}] id={it['id'][:20]}… " if len(it["id"]) > 20 else f"  [{i}] id={it['id']} ")
+            print(f"      {it['title'][:50]}{'…' if len(it['title']) > 50 else ''}")
+        if len(current_items) > 10:
+            print(f"  … 共 {len(current_items)} 条")
+        cached_ids = _cached_ids(cache)
+        new_items = [x for x in current_items if x["id"] not in cached_ids]
+        new_titles = [x["title"] for x in new_items]
+        if new_titles:
+            print(f"发现 {len(new_titles)} 条新增公告（按 ID），发送通知。")
+            if send_email(new_titles):
+                save_cache_items(current_items)
+            else:
+                print("邮件发送失败，本次不更新缓存。", file=sys.stderr)
+        else:
+            print("无新增公告（按 ID），发送「无新增」通知邮件。")
+            send_email([])
+            if current_items:
+                save_cache_items(current_items)
+        print("本次运行结束。")
+        return
+
+    # HTML 模式：抓页面 + 按标题比较
+    cached_titles = cache.get("titles", []) if isinstance(cache.get("titles"), list) else []
     try:
         html = fetch_page_maybe_follow_redirect()
     except requests.RequestException as e:
@@ -202,18 +320,18 @@ def main() -> None:
             print(f"  [{i}] {t[:60]}{'…' if len(t) > 60 else ''}")
         if len(current_titles) > 10:
             print(f"  … 共 {len(current_titles)} 条")
-    new_titles = get_new_titles(current_titles, cached)
+    new_titles = get_new_titles(current_titles, cached_titles)
     if new_titles:
         print(f"发现 {len(new_titles)} 条新增公告，发送通知。")
         if send_email(new_titles):
-            save_cache(current_titles)
+            save_cache_titles(current_titles)
         else:
             print("邮件发送失败，本次不更新缓存。", file=sys.stderr)
     else:
         print("无新增公告，发送「无新增」通知邮件。")
         send_email([])
         if current_titles:
-            save_cache(current_titles)
+            save_cache_titles(current_titles)
     print("本次运行结束。")
 
 

@@ -215,6 +215,23 @@ git push
    在 Secrets 里 **New repository secret** → Name 填 `MONITOR_URL`，Secret 填刚复制的 URL（如 `http://www.scs.gov.cn/...` 或 `http://bm.scs.gov.cn/...`）→ 保存。  
    配置后脚本会**直接抓该页面**，不再走入口+跳转，才有机会解析到公告标题并发出「发现新增公告」邮件。
 
+6. **推荐：页面是“动态加载”时，用列表接口（LIST_API_URL）**  
+   国考专题等站点多为 **前端请求接口 API 再渲染列表**，只抓 HTML 拿不到数据。  
+   **做法**：在 Secrets 里添加 **Name** = `LIST_API_URL`，**Secret** = 列表接口的完整 URL（见下方「如何找到正确接口」）。  
+   配置后脚本会**直接请求该接口的 JSON**，按 **ID** 比较是否有新增（不受 HTML/顺序变化影响），稳定可靠。
+
+#### 如何找到正确接口（LIST_API_URL）
+
+1. 浏览器打开专题页（如 http://bm.scs.gov.cn/pp/gkweb/core/web/ui/business/home/gkhome.html）。
+2. 按 **F12** → 切到 **Network（网络）** → 筛选 **XHR** 或 **Fetch**。
+3. **刷新页面**（或点击「招考公告」「公告公示」等 tab）。
+4. 在请求列表里找**返回 JSON、且内容里包含公告标题/列表**的那条请求，点开查看：
+   - **Request URL** 即为接口地址（完整复制，含 `http` 或 `https`）。
+   - 响应里通常有 `list` / `data.list` / `records` 等数组，每项有 `id`/`articleId`、`title`/`articleTitle` 等字段。
+5. 把该 **Request URL** 填到 Secret **LIST_API_URL** 中。若接口需要固定参数（如 `type=1`），一并写在 URL 里。
+
+**注意**：招考公告、政策法规、公告公示等可能是**不同接口或不同参数**，要监控哪一块就填对应接口。脚本支持常见 JSON 结构（`data.list`、`list`、`records` 等及 `id`/`title` 等字段名）。
+
 **操作步骤**：在 **Actions** 的 Secrets 页 → 点 **New repository secret** → **Name** 填 `SMTP_HOST`，**Secret** 填你的 SMTP 服务器（如 `smtp.163.com`）→ 保存；再新建一个，Name 填 `SMTP_PORT`，Secret 填 `587`（或服务商要求的端口）→ 保存。
 
 保存后，workflow 中通过 `secrets.EMAIL_USER` 等使用，未设置的 `SMTP_HOST` / `SMTP_PORT` 在脚本中会使用默认值，无需在 YAML 里写明文。
@@ -319,7 +336,7 @@ git push
    保存后重新跑一次 workflow，看日志里「本次共解析到」是否大于 0 且列表中是否出现新公告。
 
 3. **若该列表页是 JS 渲染（配置了正确 URL 仍解析到 0 条）**  
-   - **办法 A**：浏览器 F12 → Network → 刷新列表页，找 XHR/Fetch 里返回列表数据的**接口 URL**（多为 JSON）。若该接口无需登录即可访问，可在脚本里增加「请求该接口并解析 JSON」的逻辑（需改代码或后续提供配置项）。  
+   - **办法 A（推荐）**：不抓 HTML，直接监控**列表接口**。按上方「如何找到正确接口」在 F12 → Network → XHR 里找到返回 JSON 的请求 URL，在 Secrets 里配置 **LIST_API_URL**。脚本会请求该接口、按 **ID** 比较新增，不受前端渲染影响。  
    - **办法 B**：使用带浏览器的方案（如 Playwright）在服务器上打开页面、等 JS 执行完再抓 HTML，依赖和配置较重，可作备选。
 
 4. **确认后删除或更新缓存（可选）**  
