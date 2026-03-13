@@ -152,19 +152,48 @@ def _item_title(obj: dict) -> str:
 def fetch_api_list(api_url: str) -> list[dict]:
     """
     请求列表接口 JSON，返回 [{"id": str, "title": str}, ...]。
-    支持常见结构：data.list / data.data.list / list，项中 id/_id/articleId、title/name/articleTitle 等。
+    优先按国考专题结构：data 下 article / others / policy / faq 四个列表；
+    否则回退到通用结构：data.list / list / records 等。
     """
     headers = {"User-Agent": USER_AGENT}
     resp = requests.get(api_url, headers=headers, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
-    data = resp.json()
-    if not isinstance(data, dict):
+    raw = resp.json()
+    if not isinstance(raw, dict):
         return []
-    lst = _get_nested_list(data)
+
+    data = raw.get("data")
+    if isinstance(data, dict) and any(k in data for k in ("article", "others", "policy", "faq")):
+        # 国考专题：四个模块（招考公告 / 其他 / 政策法规 / 常见问题）
+        article = data.get("article") if isinstance(data.get("article"), list) else []
+        others = data.get("others") if isinstance(data.get("others"), list) else []
+        policy = data.get("policy") if isinstance(data.get("policy"), list) else []
+        faq = data.get("faq") if isinstance(data.get("faq"), list) else []
+        print("article:", len(article))
+        print("others:", len(others))
+        print("policy:", len(policy))
+        print("faq:", len(faq))
+        items: list[dict] = []
+        seen_ids: set[str] = set()
+        for module in (article, others, policy, faq):
+            for item in module:
+                if not isinstance(item, dict):
+                    continue
+                iid = str(item.get("id") or item.get("_id") or "")
+                title = (item.get("title") or item.get("name") or "").strip() or "(无标题)"
+                if iid and iid in seen_ids:
+                    continue
+                if iid:
+                    seen_ids.add(iid)
+                items.append({"id": iid or f"noid_{len(items)}", "title": title})
+        return items
+
+    # 通用结构
+    lst = _get_nested_list(raw)
     if not lst or not isinstance(lst, list):
         return []
     out: list[dict] = []
-    seen_ids: set[str] = set()
+    seen_ids = set()
     for item in lst:
         if not isinstance(item, dict):
             continue
