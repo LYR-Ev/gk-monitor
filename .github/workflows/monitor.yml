@@ -1,4 +1,4 @@
-# 国家公务员局 2026 国考公告监控（Playwright + 整页截图版）
+# 国家公务员局 2026 国考公告监控（Playwright + 整页截图 + 视觉对比版）
 # 每 6 小时运行一次，支持手动触发；使用 secrets 传递邮箱配置
 name: 2026国考公告监控
 
@@ -28,11 +28,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-noto-color-emoji
 
-      - name: 恢复 cache.json
+      # 恢复两个关键文件：cache.json（条目快照）+ page_prev.png（上次截图，视觉对比基准）
+      - name: 恢复缓存（cache.json + page_prev.png）
         uses: actions/cache/restore@v4
         id: cache
         with:
-          path: cache.json
+          path: |
+            cache.json
+            page_prev.png
           key: gk-monitor-cache-${{ github.ref_name }}-${{ github.run_id }}
           restore-keys: |
             gk-monitor-cache-${{ github.ref_name }}-
@@ -58,21 +61,28 @@ jobs:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           MONITOR_URL: ${{ secrets.MONITOR_URL }}
+          KEYWORDS: ${{ secrets.KEYWORDS }}
         run: |
           . .venv/bin/activate
           python monitor.py
 
-      - name: 保存 cache.json
+      - name: 保存缓存（cache.json + page_prev.png）
         uses: actions/cache/save@v4
-        if: hashFiles('cache.json') != ''
+        if: hashFiles('cache.json') != '' || hashFiles('page_prev.png') != ''
         with:
-          path: cache.json
+          path: |
+            cache.json
+            page_prev.png
           key: gk-monitor-cache-${{ github.ref_name }}-${{ github.run_id }}
 
-      - name: 上传页面截图（便于在 Actions 里回看）
-        if: always() && hashFiles('page.png') != ''
+      - name: 上传页面截图 + 差异图（便于在 Actions 里回看）
+        if: always() && (hashFiles('page.png') != '' || hashFiles('page_diff.png') != '')
         uses: actions/upload-artifact@v4
         with:
           name: page-screenshot-${{ github.run_id }}
-          path: page.png
+          path: |
+            page.png
+            page_prev.png
+            page_diff.png
+          if-no-files-found: ignore
           retention-days: 14

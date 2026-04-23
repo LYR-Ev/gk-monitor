@@ -51,3 +51,5 @@ Thumbs.db
 
 # 监控脚本运行时生成的页面截图（由 workflow artifact 上传，不入库）
 page.png
+page_prev.png
+page_diff.png
