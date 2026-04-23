@@ -1,4 +1,4 @@
-# 国家公务员局 2026 国考公告监控
+# 国家公务员局 2026 国考公告监控（Playwright + 整页截图版）
 # 每 6 小时运行一次，支持手动触发；使用 secrets 传递邮箱配置
 name: 2026国考公告监控
 
@@ -23,6 +23,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: 安装中文字体（让截图里的汉字能正确显示）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-noto-color-emoji
+
       - name: 恢复 cache.json
         uses: actions/cache/restore@v4
         id: cache
@@ -37,7 +42,13 @@ jobs:
         run: |
           python -m venv .venv
           . .venv/bin/activate
+          pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: 安装 Playwright Chromium 浏览器（含系统依赖）
+        run: |
+          . .venv/bin/activate
+          python -m playwright install --with-deps chromium
 
       - name: 运行监控脚本
         env:
@@ -47,7 +58,6 @@ jobs:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           MONITOR_URL: ${{ secrets.MONITOR_URL }}
-          LIST_API_URL: ${{ secrets.LIST_API_URL }}
         run: |
           . .venv/bin/activate
           python monitor.py
@@ -58,3 +68,11 @@ jobs:
         with:
           path: cache.json
           key: gk-monitor-cache-${{ github.ref_name }}-${{ github.run_id }}
+
+      - name: 上传页面截图（便于在 Actions 里回看）
+        if: always() && hashFiles('page.png') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: page-screenshot-${{ github.run_id }}
+          path: page.png
+          retention-days: 14
